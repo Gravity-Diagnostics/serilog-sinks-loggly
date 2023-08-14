@@ -8,7 +8,6 @@ using Serilog.Context;
 using Serilog.Core;
 using Serilog.Core.Enrichers;
 using Serilog.Enrichers;
-using Serilog.Sinks.RollingFileAlternate;
 
 namespace SampleDurableLogger
 {
@@ -17,7 +16,8 @@ namespace SampleDurableLogger
         public static void Main()
         {
             SetupLogglyConfiguration();
-            using (var logger = CreateLogger(@"C:\test\Logs\"))
+            LoggingLevelSwitch logLevelSwitch = new();
+            using (var logger = CreateLogger(@"C:\test\Logs\", logLevelSwitch))
             {
                 logger.Information("Test message - app started");
                 logger.Warning("Test message with {@Data}", new {P1 = "sample", P2 = DateTime.Now});
@@ -30,6 +30,8 @@ namespace SampleDurableLogger
                 logger.Information("Second test message");
                 logger.Warning("Second test message with {@Data}", new {P1 = "sample2", P2 = DateTime.Now, P3 = DateTime.UtcNow, P4 = DateTimeOffset.Now, P5 = DateTimeOffset.UtcNow});
 
+                //Uncomment this to test using the log level switch
+                //logLevelSwitch.MinimumLevel = Serilog.Events.LogEventLevel.Warning;
 
                 Console.WriteLine(
                     "Offline messages written. Once you have confirmed that messages have been written locally, reconnect to see messages go out. Press Enter for more messages to be written.");
@@ -52,7 +54,7 @@ namespace SampleDurableLogger
             }
         }
 
-        static Logger CreateLogger(string logFilePath)
+        static Logger CreateLogger(string logFilePath, LoggingLevelSwitch logSwitch)
         {
             //write selflog to stderr
             Serilog.Debugging.SelfLog.Enable(Console.Error);
@@ -69,17 +71,22 @@ namespace SampleDurableLogger
                 //Add sinks
                 .WriteTo.Async(s => s.Loggly(
                             bufferBaseFilename: logFilePath + "buffer",
-                            formatProvider: CreateLoggingCulture())
-                        .MinimumLevel.Information()
+                            formatProvider: CreateLoggingCulture(),
+                            controlLevelSwitch: logSwitch)
                 )
-                .WriteTo.Async(s => s.RollingFileAlternate(
+                .WriteTo.Console(outputTemplate:
+                        "[{ProcessId}] {Timestamp} [{ThreadId}] [{Level}] [{SourceContext}] [{Category}] {Message}{NewLine}{Exception}",
+                        formatProvider: CreateLoggingCulture(),
+                        levelSwitch: logSwitch
+                )
+                .WriteTo.Async(s => s.File(
                     logFilePath,
                     outputTemplate:
                         "[{ProcessId}] {Timestamp} [{ThreadId}] [{Level}] [{SourceContext}] [{Category}] {Message}{NewLine}{Exception}",
                     fileSizeLimitBytes: 10 * 1024 * 1024,
                     retainedFileCountLimit: 100,
-                    formatProvider: CreateLoggingCulture())
-                        .MinimumLevel.Debug()
+                    formatProvider: CreateLoggingCulture(),
+                    levelSwitch: logSwitch)
                 )
                 .CreateLogger();
         }
