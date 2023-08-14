@@ -16,14 +16,13 @@ using System;
 using System.Text;
 using Serilog.Core;
 using Serilog.Events;
-using Serilog.Sinks.RollingFile;
 
 namespace Serilog.Sinks.Loggly
 {
     class DurableLogglySink : ILogEventSink, IDisposable
     {
         readonly HttpLogShipper _shipper;
-        readonly RollingFileSink _sink;
+        readonly Logger _sink;
 
         public DurableLogglySink(
             string bufferBaseFilename,
@@ -56,12 +55,16 @@ namespace Serilog.Sinks.Loggly
                 logglyConfiguration);
 
             //writes events to the file to support connection recovery
-            _sink = new RollingFileSink(
-                bufferBaseFilename + "-{Date}.json",
-                new LogglyFormatter(formatProvider, includes), //serializes as LogglyEvent
-                bufferFileSizeLimitBytes,
-                retainedFileCountLimit,
-                encoding);
+            _sink = new LoggerConfiguration()
+                .MinimumLevel.ControlledBy(levelControlSwitch)
+                .WriteTo.File(new LogglyFormatter(formatProvider, includes),
+                        bufferBaseFilename + "-.json",
+                        rollingInterval: RollingInterval.Day,
+                        fileSizeLimitBytes: bufferFileSizeLimitBytes,
+                        rollOnFileSizeLimit: true,
+                        retainedFileCountLimit: retainedFileCountLimit,
+                        encoding: encoding)
+                .CreateLogger();
         }
 
         public void Dispose()
@@ -76,7 +79,7 @@ namespace Serilog.Sinks.Loggly
             // are worth the ambiguity.
             if (_shipper.IsIncluded(logEvent))
             {
-                _sink.Emit(logEvent);
+                _sink.Write(logEvent);
             }
         }
     }

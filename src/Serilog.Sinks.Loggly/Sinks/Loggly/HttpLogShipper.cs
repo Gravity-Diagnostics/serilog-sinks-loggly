@@ -115,8 +115,6 @@ namespace Serilog.Sinks.Loggly
 
         async Task OnTick()
         {
-            LogEventLevel? minimumAcceptedLevel = LogEventLevel.Debug;
-
             try
             {
                 //we'll use this to control the number of events read per cycle. If the batch limit is reached,
@@ -178,8 +176,6 @@ namespace Serilog.Sinks.Loggly
             {
                 lock (_stateLock)
                 {
-                    _controlledSwitch.Update(minimumAcceptedLevel);
-
                     if (!_unloading)
                         SetTimer();
                 }

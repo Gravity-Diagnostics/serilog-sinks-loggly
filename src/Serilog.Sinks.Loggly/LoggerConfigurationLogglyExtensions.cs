@@ -19,6 +19,7 @@ using Serilog.Configuration;
 using Serilog.Core;
 using Serilog.Events;
 using Serilog.Sinks.Loggly;
+using Serilog.Sinks.PeriodicBatching;
 
 namespace Serilog
 {
@@ -34,6 +35,7 @@ namespace Serilog
         /// <param name="restrictedToMinimumLevel">The minimum log event level required in order to write an event to the sink.</param>
         /// <param name="formatProvider">Supplies culture-specific formatting information, or null.</param>
         /// <param name="batchPostingLimit">The maximum number of events to post in a single batch.</param>
+        /// <param name="batchQueueSize">The maximum number of events to retain in the queue at one time.</param>
         /// <param name="period">The time to wait between checking for event batches.</param>
         /// <param name="bufferBaseFilename">Path for a set of files that will be used to buffer events until they
         /// can be successfully transmitted across the network. Individual files will be created using the
@@ -62,6 +64,7 @@ namespace Serilog
             this LoggerSinkConfiguration loggerConfiguration,
             LogEventLevel restrictedToMinimumLevel = LevelAlias.Minimum,
             int batchPostingLimit = LogglySink.DefaultBatchPostingLimit,
+            int? batchQueueSize = null,
             TimeSpan? period = null,
             IFormatProvider formatProvider = null,
             string bufferBaseFilename = null,
@@ -81,6 +84,7 @@ namespace Serilog
                 throw new ArgumentOutOfRangeException(nameof(bufferFileSizeLimitBytes), "Negative value provided; file size limit must be non-negative.");
 
             var defaultedPeriod = period ?? LogglySink.DefaultPeriod;
+            var defaultedBatchQueueSize = batchQueueSize ?? LogglySink.DefaultBatchQueueSize;
 
             ILogEventSink sink;
 
@@ -99,10 +103,25 @@ namespace Serilog
 
             if (bufferBaseFilename == null)
             {
-                sink = new LogglySink(formatProvider, batchPostingLimit, defaultedPeriod, activeLogglyConfig, includes);
+                if (controlLevelSwitch == null)
+                {
+                    controlLevelSwitch = new LoggingLevelSwitch(restrictedToMinimumLevel);
+                }
+                var logglySink = new LogglySink(formatProvider, activeLogglyConfig, includes, controlLevelSwitch);
+                sink = new PeriodicBatchingSink(logglySink, new PeriodicBatchingSinkOptions()
+                {
+                    BatchSizeLimit = batchPostingLimit,
+                    EagerlyEmitFirstEvent = true,
+                    Period = defaultedPeriod,
+                    QueueLimit = defaultedBatchQueueSize
+                });
             }
             else
             {
+                if (controlLevelSwitch == null)
+                {
+                    controlLevelSwitch = new LoggingLevelSwitch(restrictedToMinimumLevel);
+                }
                 sink = new DurableLogglySink(
                     bufferBaseFilename,
                     batchPostingLimit,
@@ -117,7 +136,7 @@ namespace Serilog
                     includes);
             }
 
-            return loggerConfiguration.Sink(sink, restrictedToMinimumLevel);
+            return loggerConfiguration.Sink(sink, restrictedToMinimumLevel, controlLevelSwitch);
         }
     }
 }

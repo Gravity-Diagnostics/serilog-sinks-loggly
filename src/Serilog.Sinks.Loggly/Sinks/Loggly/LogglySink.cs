@@ -17,6 +17,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Loggly;
+using Serilog.Core;
 using Serilog.Debugging;
 using Serilog.Events;
 using Serilog.Sinks.PeriodicBatching;
@@ -26,17 +27,25 @@ namespace Serilog.Sinks.Loggly
     /// <summary>
     /// Writes log events to the Loggly.com service.
     /// </summary>
-    public class LogglySink : PeriodicBatchingSink
+    public class LogglySink : IBatchedLogEventSink
     {
         readonly LogEventConverter _converter;
+        bool _isLogglyCreateError = false;
         readonly LogglyClient _client;
         readonly LogglyConfigAdapter _adapter;
+        LoggingLevelSwitch _levelSwitch;
 
         /// <summary>
         /// A reasonable default for the number of events posted in
         /// each batch.
         /// </summary>
         public const int DefaultBatchPostingLimit = 10;
+
+        /// <summary>
+        /// A reasonable default for the number of events to hold in
+        /// the active queue.
+        /// </summary>
+        public const int DefaultBatchQueueSize = 100_000;
 
         /// <summary>
         /// A reasonable default time to wait between checking for event batches.
@@ -46,28 +55,37 @@ namespace Serilog.Sinks.Loggly
         /// <summary>
         /// Construct a sink that saves logs to the specified storage account. Properties are being send as data and the level is used as tag.
         /// </summary>
-        /// <param name="batchSizeLimit">The maximum number of events to post in a single batch.</param>
-        /// <param name="period">The time to wait between checking for event batches.</param>
         ///  <param name="formatProvider">Supplies culture-specific formatting information, or null.</param>        
-        public LogglySink(IFormatProvider formatProvider, int batchSizeLimit, TimeSpan period) : this(formatProvider, batchSizeLimit, period, null, null)
-        {            
+        public LogglySink(IFormatProvider formatProvider) : this(formatProvider, null, null, null)
+        {
         }
 
         /// <summary>
         /// Construct a sink that saves logs to the specified storage account. Properties are being send as data and the level is used as tag.
         /// </summary>
-        /// <param name="batchSizeLimit">The maximum number of events to post in a single batch.</param>
-        /// <param name="period">The time to wait between checking for event batches.</param>
-        ///  <param name="formatProvider">Supplies culture-specific formatting information, or null.</param>
+        /// <param name="formatProvider">Supplies culture-specific formatting information, or null.</param>
         /// <param name="logglyConfig">Used to configure underlying LogglyClient programmaticaly. Otherwise use app.Config.</param>
         /// <param name="includes">Decides if the sink should include specific properties in the log message</param>
-        public LogglySink(IFormatProvider formatProvider, int batchSizeLimit, TimeSpan period, LogglyConfiguration logglyConfig, LogIncludes includes)
-            : base (batchSizeLimit, period)
+        public LogglySink(IFormatProvider formatProvider, LogglyConfiguration logglyConfig, LogIncludes includes, LoggingLevelSwitch levelSwitch)
         {
+            if (levelSwitch == null)
+            {
+                levelSwitch = new LoggingLevelSwitch();
+            }
+            _levelSwitch = levelSwitch;
+
             if (logglyConfig != null)
             {
                 _adapter = new LogglyConfigAdapter();
-                _adapter.ConfigureLogglyClient(logglyConfig);
+                try
+                {
+                    _adapter.ConfigureLogglyClient(logglyConfig);
+                }
+                catch (Exception e)
+                {
+                    SelfLog.WriteLine("LogglySink failed to instantiate. Error Message: {0}\n Stack Trace: {1}", e.Message, e.StackTrace);
+                    _isLogglyCreateError = true;
+                }
             }
             _client = new LogglyClient();
             _converter = new LogEventConverter(formatProvider, includes);
@@ -76,12 +94,16 @@ namespace Serilog.Sinks.Loggly
         /// <summary>
         /// Emit a batch of log events, running asynchronously.
         /// </summary>
-        /// <param name="events">The events to emit.</param>
-        /// <remarks>Override either <see cref="PeriodicBatchingSink.EmitBatch"/> or <see cref="PeriodicBatchingSink.EmitBatchAsync"/>,
-        /// not both.</remarks>
-        protected override async Task EmitBatchAsync(IEnumerable<LogEvent> events)
+        /// <param name="batch">The events to emit.</param>
+        async Task IBatchedLogEventSink.EmitBatchAsync(IEnumerable<LogEvent> batch)
         {
-            LogResponse response = await _client.Log(events.Select(_converter.CreateLogglyEvent)).ConfigureAwait(false);
+            if (_isLogglyCreateError)
+            {
+                return;
+            }
+
+            IEnumerable<LogEvent> leveledBatch = batch.Where(s => s.Level >= _levelSwitch.MinimumLevel);
+            LogResponse response = await _client.Log(leveledBatch.Select(_converter.CreateLogglyEvent)).ConfigureAwait(false);
 
             switch (response.Code)
             {
@@ -93,6 +115,7 @@ namespace Serilog.Sinks.Loggly
                     break;
             }
         }
-        
+
+        public async Task OnEmptyBatchAsync() { }
     }
 }
